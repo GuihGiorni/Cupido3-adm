@@ -6,8 +6,6 @@ from datetime import datetime
 app = Flask(__name__)
 DB_FILE = 'banco_dados.json'
 
-# Inicialização com o estoque atualizado (sem Carro do Amor)
-# Você pode alterar esses números aqui no código se precisar ajustar a quantidade exata que sobrou
 ESTOQUE_INICIAL = {
     "vendas": [],
     "estoque": {
@@ -127,6 +125,56 @@ def atualizar_entrega():
     salvar_dados(dados)
     return jsonify({"status": "sucesso"})
 
+# NOVA ROTA: Excluir venda e devolver ao estoque
+@app.route('/api/excluir_venda', methods=['POST'])
+def excluir_venda():
+    req = request.json
+    venda_id = int(req.get('id'))
+    
+    dados = carregar_dados()
+    
+    # Busca a venda pelo ID
+    venda_para_excluir = None
+    for v in dados['vendas']:
+        if v['id'] == venda_id:
+            venda_para_excluir = v
+            break
+            
+    if not venda_para_excluir:
+        return jsonify({"status": "erro", "mensagem": "Pedido não encontrado!"}), 404
+
+    produto = venda_para_excluir['produto']
+    qtd = int(venda_para_excluir['quantidade'])
+    adicional_anel = venda_para_excluir.get('anel_adicional', False)
+    
+    # Refaz a lógica de devolução
+    itens_para_devolver = []
+    if produto == "Carta Normal":
+        itens_para_devolver.append("Carta Normal")
+    elif produto == "Carta Pirulito":
+        itens_para_devolver.append("Carta Normal")
+        itens_para_devolver.append("Carta + Pirulito")
+    elif produto == "Carta Bombom":
+        itens_para_devolver.append("Carta Normal")
+        itens_para_devolver.append("Carta + Bombom")
+    elif produto in dados['estoque'] and dados['estoque'][produto] not in ["Infinita", "Infinito"]:
+        itens_para_devolver.append(produto)
+        
+    # Devolve para o estoque
+    for item in itens_para_devolver:
+        if item in dados['estoque'] and dados['estoque'][item] not in ["Infinita", "Infinito"]:
+            dados['estoque'][item] += qtd
+            
+    if adicional_anel:
+        dados['estoque']['Anel de plástico'] += qtd
+
+    # Remove a venda da lista
+    dados['vendas'] = [v for v in dados['vendas'] if v['id'] != venda_id]
+    
+    salvar_dados(dados)
+    return jsonify({"status": "sucesso"})
+
+
 HTML_LAYOUT = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -194,6 +242,9 @@ HTML_LAYOUT = """
         .status-pago { background-color: #E0F2FE; color: #0369A1; }
         .status-entrega-nao { background-color: #FFF3CD; color: #856404; }
         .status-entrega-sim { background-color: #D1E7DD; color: #0F5132; }
+
+        .btn-excluir { background-color: #FEE2E2; border: 1px solid #EF4444; color: #991B1B; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .btn-excluir:hover { background-color: #FCA5A5; color: white; }
 
         .grid-estoque { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
         .card-estoque { background: #fff; padding: 15px; border-radius: 10px; border-left: 5px solid var(--cor-secundaria); text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
@@ -282,6 +333,7 @@ HTML_LAYOUT = """
                     <table>
                         <thead>
                             <tr>
+                                <th>Ação</th>
                                 <th>Hora</th>
                                 <th>Para Quem?</th>
                                 <th>Produto</th>
@@ -380,6 +432,9 @@ HTML_LAYOUT = """
 
                 corpo.innerHTML += `
                     <tr class="linha-historico" data-destinatario="${v.destinatario.toLowerCase()}">
+                        <td>
+                            <button class="btn-excluir" onclick="excluirPedido(${v.id})" title="Excluir este pedido">🗑️</button>
+                        </td>
                         <td><strong>${v.horario}</strong></td>
                         <td><mark style="background-color: #FFE3E8; padding:2px 5px; border-radius:4px; font-weight:bold;">${v.destinatario}</mark></td>
                         <td>${v.produto} (x${v.quantidade}) ${v.anel_adicional ? '💍' : ''}</td>
@@ -445,6 +500,26 @@ HTML_LAYOUT = """
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({id: id, saiu_entrega: novoStatus})
             }).then(() => atualizarDados());
+        }
+
+        function excluirPedido(id) {
+            if(confirm("Tem certeza que deseja apagar este pedido? Os itens voltarão automaticamente para o estoque.")) {
+                fetch('/api/excluir_venda', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id: id})
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if(data.status === "sucesso") {
+                        alert("🗑️ Pedido excluído e itens devolvidos ao estoque!");
+                        atualizarDados();
+                    } else {
+                        alert("Erro: " + data.mensagem);
+                    }
+                })
+                .catch(err => alert("Erro ao excluir pedido."));
+            }
         }
 
         function ordenarHistorico(campo) {
